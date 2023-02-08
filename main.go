@@ -7,6 +7,7 @@ import (
 	vbr "github.com/AlecRandazzo/VBR-Parser"
 	"io"
 	"os"
+	"sync"
 )
 
 type VolumeHandler struct {
@@ -43,6 +44,13 @@ func main() {
 	volume, _ := GetVolumeHandler()
 	mftRecord, _ := ParseMFTRecord(&volume)
 
+	waitForFileCopying := sync.WaitGroup{}
+	waitForFileCopying.Add(1)
+
+	chanFile := make(chan fileReader, 100)
+
+	go Collect(chanFile, &waitForFileCopying)
+
 	foundFile := foundFile{
 		dataRuns: mftRecord.DataAttribute.NonResidentDataAttribute.DataRuns,
 		fullPath: "$mft",
@@ -59,15 +67,36 @@ func main() {
 		reader:   pipeReader,
 	}
 
+	chanFile <- fileReader
 	volume.mftReader = teeReader
-
-	output := "output\\$mft"
-	wrtier := io.Open(output)
-	io.Copy(writer, fileReader.reader)
 
 	fmt.Print(mftRecord)
 	fmt.Print("\n------\n")
 	fmt.Print(mftReader)
+}
+
+func Collect(readers chan fileReader, waitForFileCopying *sync.WaitGroup) (err error) {
+	defer waitForFileCopying.Done()
+
+	openChannel := true
+
+	for openChannel == true {
+		reader := fileReader{}
+		reader, openChannel = <-readers
+
+		if openChannel == false {
+			break
+		}
+
+		path := reader.fullPath
+
+		var writer io.Writer
+		writer, _ = os.Create(path)
+
+		io.Copy(writer, reader.reader)
+	}
+	err = nil
+	return
 }
 
 func GetVolumeHandler() (volume VolumeHandler, err error) {
